@@ -18,11 +18,11 @@ class Header(NamedTuple):
 
 class WsMessageHandler:
     @classmethod
-    def pack(cls):
+    def pack(cls, *args, **kwargs):
         raise NotImplementedError
 
     @classmethod
-    def unpack(cls):
+    def unpack(cls, *args, **kwargs):
         raise NotImplementedError
 
 
@@ -71,47 +71,53 @@ class PackageHandler(WsMessageHandler):
     @classmethod
     def pack(cls, msg: bytes, op: WsOp):
         msg_len = len(msg)
-        total_len = msg_len + WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH.value
-        return HeaderPkgHandler.pack(total_len, op=op.value) + msg
+        total_len = msg_len + WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH
+        return HeaderPkgHandler.pack(total_len, op=op) + msg
 
     @classmethod
     def unpack(cls, package: bytes):
-        header = HeaderPkgHandler.unpack(package[: WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH.value])
-        if header.msg_len < len(package):
-            cls.unpack(package=package[: header.msg_len])
-            op = WsOp(header.op)
-            if op != WsOp.WS_OP_MESSAGE and op != WsOp.WS_OP_CONNECT_SUCCESS:
-                if op == WsOp.WS_OP_HEARTBEAT_REPLY:
-                    body = {"count": struct.unpack("!I", package[WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH :])}
+        header = HeaderPkgHandler.unpack(
+            package[: WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH.value]
+        )
+        if (
+            header.msg_len < len(package)
+            and cls.unpack(package=package[: header.msg_len])
+            and (header.op not in [WsOp.WS_OP_MESSAGE, WsOp.WS_OP_CONNECT_SUCCESS])
+        ):
+            if header.op == WsOp.WS_OP_HEARTBEAT_REPLY:
+                return {
+                    "count": struct.unpack(
+                        "!I", package[WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH :]
+                    )
+                }
         else:
-            index = WsOp.WS_PACKAGE_OFFSET.value
+            index = WsOp.WS_PACKAGE_OFFSET
             s = header.msg_len
             a = ""
             u = ""
             body = []
-            breakpoint()
             while index < len(package):
                 s = struct.unpack_from("!I", package, index)[0]
-                a = struct.unpack_from("!H", package, index + WsOp.WS_HEADER_OFFSET.value)[0]
+                a = struct.unpack_from("!H", package, index + WsOp.WS_HEADER_OFFSET)[0]
                 try:
                     if header.ver == WsOp.WS_BODY_PROTOCOL_VERSION_NORMAL.value:
                         c = package[index + a : index + s].decode("utf-8")
                         u = json.loads(c) if c else None
-                    elif header.ver == WsOp.WS_BODY_PROTOCOL_VERSION_BROTLI:
-                        l = package[index + a : index + s]
-                        h = brotli.decompress(l.decode("utf-8"))
+                    elif header.ver == WsOp.WS_BODY_PROTOCOL_VERSION_BROTLI.value:
+                        msg = package[index + a : index + s]
+                        h = brotli.decompress(msg)
                         u = cls.unpack(h)
                     u and body.append(u)
-                except Exception:
-                    print("error")
+                except Exception as e:
+                    print(e)
                 finally:
                     index += s
-        return body
+            return body
 
 
-def get_danmu_info(room_id: int) -> DanMuInfo:
+async def get_danmu_info(room_id: int) -> DanMuInfo:
     url = "https://api.live.bilibili.com/xlive/web-room/v1/index/getDanmuInfo"
-    with httpx.Client() as client:
-        resp = client.get(url, params={"id": room_id})
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(url, params={"id": room_id})
         resp.raise_for_status()
         return DanMuInfo(**resp.json())
