@@ -1,48 +1,95 @@
+# encoding: utf-8
+# author: liyn
+# time: 2022/12/1 15:35
+import asyncio
 import json
 import typing
+from abc import ABC
 
-from websockets import WebSocketClientProtocol, connect
-
-from utils import PackageHandler, WsOp, get_danmu_info
+import websockets
 
 
-class BiliBiliLiveDanmu:
-    def __init__(self, room_id: int, uid: typing.Optional[int] = None):
-        self._room_id = room_id
-        self._uid = uid or 0
-        self._danmu_info = None
-        self._on_message_callbacks = []
-        self.client: typing.Optional[WebSocketClientProtocol] = None
+class WsClient(ABC):
 
-    async def send_str(self, data: str, op: WsOp):
-        await self.client.send(PackageHandler.pack(data.encode("utf-8"), op=op))
+    def __init__(self, uri: str):
+        self._uri = uri
 
-    async def send_json(self, body: typing.Dict, op: WsOp):
-        await self.send_str(json.dumps(body), op=op)
+    async def connect(self):
+        raise NotImplementedError
 
-    async def init(self):
-        self._danmu_info = await get_danmu_info(self._room_id)
-        host_info = self._danmu_info.data.host_list[0]
-        uri = f"wss://{host_info.host}:{host_info.wss_port}/sub"
-        self.client = await connect(uri)
-        await self._say_hello()
+    async def send(self, msg: typing.Union[str, bytes]):
+        raise NotImplementedError
 
-    async def _say_hello(self):
-        body = {
-            "uid": self._uid,
-            "roomid": self._room_id,
-            "protover": 3,
-            "platform": "web",
-            "type": 2,
-            "key": self._danmu_info.data.token,
-        }
-        try:
-            await self.send_json(body, WsOp.WS_OP_USER_AUTHENTICATION)
-            for i in range(20):
-                resp = await self.client.recv()
-                print(PackageHandler.unpack(resp))
-        finally:
-            await self.client.close()
+    async def send_json(self, body: typing.Dict[typing.Any, typing.Any]):
+        msg = json.dumps(body)
+        return await self.send(msg)
 
-    def add_on_message_callback(self, func: typing.Callable[[bytes], bytes]):
-        self._on_message_callbacks.append(func)
+    async def recv(self, run_time=0) -> typing.AsyncGenerator:
+        raise NotImplementedError
+
+    async def recv_once(self) -> typing.Union[str, bytes]:
+        raise NotImplementedError
+
+    async def close(self):
+        raise NotImplementedError
+
+
+class DefaultWsClient(WsClient):
+    async def recv_once(self):
+        return await self.__client.recv()
+
+    def __init__(self, uri: str):
+        super(DefaultWsClient, self).__init__(uri)
+        self.__client: typing.Optional[websockets.WebSocketClientProtocol] = None
+
+    async def connect(self) -> "DefaultWsClient":
+        self.__client = await websockets.connect(self._uri)
+        return self
+
+    async def send(self, msg: typing.Union[str, bytes]):
+        await self.__client.send(msg)
+
+    async def __call__(self):
+        await self.connect()
+
+    def __await__(self):
+        return self
+
+    async def __aenter__(self) -> "DefaultWsClient":
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.close()
+
+    async def recv(self, run_time: int = 0) -> typing.AsyncGenerator:
+        end_flag = False
+        if self.__client is None:
+            await self.connect()
+
+        def stop_recv():
+            nonlocal end_flag
+            end_flag = True
+
+        if run_time != 0:
+            loop = asyncio.get_event_loop()
+            loop.call_later(run_time, callback=stop_recv)
+        async for msg in self.__client:
+            yield msg
+            if end_flag:
+                break
+
+    async def close(self):
+        await self.__client.close()
+
+
+# async def main():
+#     # async with DefaultWsClient("ws://127.0.0.1:8001") as cc:
+#     cc = DefaultWsClient("ws://127.0.0.1:8001")
+#     # await cc.connect()
+#     async for msg in cc.recv(2):
+#         print(msg)
+#
+#
+# if __name__ == "__main__":
+#     asyncio.run(main())

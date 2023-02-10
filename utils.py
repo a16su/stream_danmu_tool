@@ -1,11 +1,13 @@
+import datetime
 import json
 import struct
+import typing
 from typing import NamedTuple
 
 import brotli
 import httpx
 
-from _types import DanMuInfo, WsOp
+from _types import DanMuInfo, WsOp, DanmuType
 
 
 class Header(NamedTuple):
@@ -76,18 +78,20 @@ class PackageHandler(WsMessageHandler):
 
     @classmethod
     def unpack(cls, package: bytes):
+        result = {"body": []}
         header = HeaderPkgHandler.unpack(
             package[: WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH.value]
         )
+        result.update(header._asdict())
         if (
             header.msg_len < len(package)
             and cls.unpack(package=package[: header.msg_len])
             and (header.op not in [WsOp.WS_OP_MESSAGE, WsOp.WS_OP_CONNECT_SUCCESS])
         ):
             if header.op == WsOp.WS_OP_HEARTBEAT_REPLY:
-                return {
-                    "count": struct.unpack(
-                        "!I", package[WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH :]
+                result["body"] = {
+                    "count": struct.unpack_from(
+                        "!I", package, WsOp.WS_PACKAGE_HEADER_TOTAL_LENGTH
                     )
                 }
         else:
@@ -95,9 +99,8 @@ class PackageHandler(WsMessageHandler):
             s = header.msg_len
             a = ""
             u = ""
-            body = []
             while index < len(package):
-                s = struct.unpack_from("!I", package, index)[0]
+                s = struct.unpack_from("!i", package, index)[0]
                 a = struct.unpack_from("!H", package, index + WsOp.WS_HEADER_OFFSET)[0]
                 try:
                     if header.ver == WsOp.WS_BODY_PROTOCOL_VERSION_NORMAL.value:
@@ -107,12 +110,46 @@ class PackageHandler(WsMessageHandler):
                         msg = package[index + a : index + s]
                         h = brotli.decompress(msg)
                         u = cls.unpack(h)
-                    u and body.append(u)
+                    u and result["body"].append(u)
                 except Exception as e:
                     print(e)
                 finally:
                     index += s
-            return body
+            return result
+
+
+def handle_danmu_msg(msg: dict):
+    info: typing.List[typing.Any] = msg["info"]
+    return handle_danmu_info(info)
+
+
+def handle_danmu_info(info: typing.List[typing.Any]):
+    t = info[0][12]
+    n = info[0][14]
+    i = info[0][13]
+    o = {
+        "stime": -1,
+        "mode": info[0][1],
+        "size": info[0][2],
+        "color": info[0][3],
+        "date": datetime.datetime.now(),
+        "uid": info[2][0],
+        "dmid": info[0][5],
+        "text": info[1],
+        "uname": info[2][1],
+        "user": {"level": info[4][0], "rank": info[2][5], "verify": info[2][6]},
+        "checkInfo": {"ts": info[9]["ts"], "ct": info[9]["ct"]},
+        "type": info[0][9],
+        "dmType": DanmuType.Text,
+        "modeInfo": info[0][15],
+    }
+    if t == DanmuType.Emoji:
+        o["dmType"] = DanmuType.Emoji
+        o["emoticonOptions"] = i
+    elif t == DanmuType.Voice:
+        o["dmType"] = DanmuType.Voice
+        o["voiceConfig"] = n
+    return o
 
 
 async def get_danmu_info(room_id: int) -> DanMuInfo:

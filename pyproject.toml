@@ -11,6 +11,7 @@ pydantic = "^1.10.2"
 httpx = "^0.23.1"
 brotli = "^1.0.9"
 websockets = "^10.4"
+apscheduler = "^3.10.0"
 
 
 [tool.poetry.group.linter.dependencies]
