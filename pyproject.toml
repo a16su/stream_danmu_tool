@@ -18,6 +18,11 @@ apscheduler = "^3.10.0"
 black = "^22.10.0"
 isort = "^5.10.1"
 
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
+notebook = "^6.5.2"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
